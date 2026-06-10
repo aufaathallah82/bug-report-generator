@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Bug Report Generator",
+  "description": "Capture browser context and generate structured bug reports locally.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Bug Report Generator",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["activeTab", "tabs", "storage", "scripting", "unlimitedStorage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["assets/contentScript.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/pageLogger.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
