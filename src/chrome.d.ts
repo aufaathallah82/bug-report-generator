@@ -21,6 +21,13 @@ declare namespace chrome {
           sendResponse: (response?: unknown) => void,
         ) => boolean | void,
       ): void;
+      removeListener(
+        callback: (
+          message: unknown,
+          sender: MessageSender,
+          sendResponse: (response?: unknown) => void,
+        ) => boolean | void,
+      ): void;
     };
 
     interface MessageSender {
@@ -46,6 +53,11 @@ declare namespace chrome {
       lastFocusedWindow?: boolean;
     }
 
+    interface TabChangeInfo {
+      status?: 'loading' | 'complete';
+      url?: string;
+    }
+
     function query(queryInfo: QueryInfo, callback: (tabs: Tab[]) => void): void;
 
     function captureVisibleTab(
@@ -64,6 +76,10 @@ declare namespace chrome {
       message: TMessage,
       callback?: (response: TResponse) => void,
     ): void;
+
+    const onUpdated: {
+      addListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
+    };
   }
 
   namespace scripting {
@@ -74,12 +90,22 @@ declare namespace chrome {
     }
 
     function executeScript(
-      injection: { target: InjectionTarget; files?: string[] },
+      injection: { target: InjectionTarget; files?: string[]; func?: (...args: never[]) => unknown; args?: unknown[] },
       callback?: (results?: unknown[]) => void,
     ): void;
   }
 
   namespace storage {
+    interface StorageChange {
+      oldValue?: unknown;
+      newValue?: unknown;
+    }
+
+    const onChanged: {
+      addListener(callback: (changes: Record<string, StorageChange>, areaName: string) => void): void;
+      removeListener(callback: (changes: Record<string, StorageChange>, areaName: string) => void): void;
+    };
+
     namespace local {
       function get(
         keys: string | string[] | Record<string, unknown> | null,

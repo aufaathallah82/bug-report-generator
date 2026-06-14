@@ -2,33 +2,29 @@ import type { BugReport, ConsoleEventRecord } from './types';
 
 export function formatBugReportMarkdown(report: BugReport): string {
   return [
-    `# ${report.title}`,
+    'Title:',
+    report.title,
     '',
-    '## Description',
-    report.description,
-    '',
-    '## Steps to Reproduce',
-    formatSteps(report.stepsToReproduce),
-    '',
-    '## Expected Result',
-    report.expectedResult,
-    '',
-    '## Actual Result',
-    report.actualResult,
-    '',
-    '## Environment Information',
+    'Environment:',
     formatEnvironment(report),
     '',
-    '## Console Errors',
+    'Steps to Reproduce:',
+    formatSteps(report.stepsToReproduce),
+    '',
+    'Expected Result:',
+    report.expectedResult,
+    '',
+    'Actual Result:',
+    report.actualResult,
+    '',
+    'Console Errors:',
     formatConsoleErrors(report.consoleErrors),
     '',
-    '## Screenshot',
-    report.screenshotDataUrl
-      ? `Screenshot captured and stored locally with report ID \`${report.id}\`.`
-      : 'No screenshot was captured.',
+    'Network Errors:',
+    formatNetworkErrors(report.networkErrors ?? []),
     '',
-    '## Capture Warnings',
-    report.warnings.length ? report.warnings.map((warning) => `- ${warning}`).join('\n') : 'None.',
+    'Additional Notes:',
+    report.additionalNotes || report.description || 'None.',
   ].join('\n');
 }
 
@@ -41,17 +37,12 @@ function formatEnvironment(report: BugReport): string {
 
   return [
     `- URL: ${report.currentUrl}`,
-    `- Page title: ${environment.pageTitle}`,
     `- Browser: ${environment.browserName}`,
-    `- User agent: ${environment.userAgent}`,
-    `- Platform: ${environment.platform}`,
-    `- Language: ${environment.language}`,
-    `- Time zone: ${environment.timeZone}`,
+    `- OS: ${environment.platform}`,
+    `- Screen size: ${environment.screen.width} x ${environment.screen.height}`,
     `- Viewport: ${environment.viewport.width} x ${environment.viewport.height} @ ${environment.viewport.devicePixelRatio}x`,
-    `- Screen: ${environment.screen.width} x ${environment.screen.height}, ${environment.screen.colorDepth}-bit color`,
-    `- Cookies enabled: ${environment.cookieEnabled ? 'Yes' : 'No'}`,
-    `- Do Not Track: ${environment.doNotTrack || 'Not set'}`,
-    `- Captured at: ${environment.capturedAt}`,
+    `- Page title: ${environment.pageTitle}`,
+    `- User agent: ${environment.userAgent}`,
   ].join('\n');
 }
 
@@ -67,4 +58,8 @@ function formatConsoleErrors(errors: ConsoleEventRecord[]): string {
       return `${index + 1}. [${error.level}] ${error.message}${location}\n   Time: ${error.timestamp}${stack}`;
     })
     .join('\n\n');
+}
+
+function formatNetworkErrors(errors: string[]): string {
+  return errors.length ? errors.map((error, index) => `${index + 1}. ${error}`).join('\n') : 'No network errors captured.';
 }
