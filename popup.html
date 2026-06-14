@@ -3,10 +3,69 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bug Report Generator</title>
+    <title>BugReportGenerator</title>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/popup/main.ts"></script>
+    <main class="popup">
+      <header class="popup-header">
+        <div>
+          <p class="eyebrow">AI-ready QA evidence</p>
+          <h1>BugReportGenerator</h1>
+        </div>
+        <span id="recordingPill" class="state-pill" data-state="idle">Idle</span>
+      </header>
+
+      <p id="status" class="status" role="status" aria-live="polite">Loading recording state...</p>
+
+      <section class="actions" aria-label="Recording actions">
+        <button id="startRecordingBtn" class="primary-button" type="button">Start Bug Recording</button>
+        <button id="stopRecordingBtn" class="secondary-button" type="button">Stop Recording</button>
+        <button id="captureScreenshotBtn" class="secondary-button" type="button">Capture Screenshot</button>
+        <button id="exportJsonBtn" class="secondary-button" type="button">Export JSON</button>
+        <button id="exportMarkdownBtn" class="secondary-button" type="button">Export Markdown</button>
+        <button id="clearSessionBtn" class="danger-button" type="button">Clear Session</button>
+      </section>
+
+      <section class="summary-panel" aria-labelledby="summaryTitle">
+        <h2 id="summaryTitle">Current Session</h2>
+        <dl class="summary">
+          <div>
+            <dt>URL</dt>
+            <dd id="currentUrl">-</dd>
+          </div>
+          <div>
+            <dt>Actions</dt>
+            <dd id="actionCount">0</dd>
+          </div>
+          <div>
+            <dt>Console Errors</dt>
+            <dd id="consoleErrorCount">0</dd>
+          </div>
+          <div>
+            <dt>Network Errors</dt>
+            <dd id="networkErrorCount">0</dd>
+          </div>
+          <div>
+            <dt>Screenshots</dt>
+            <dd id="screenshotCount">0</dd>
+          </div>
+          <div>
+            <dt>Session</dt>
+            <dd id="sessionId">-</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="timeline-panel" aria-labelledby="timelineTitle">
+        <div class="section-heading">
+          <h2 id="timelineTitle">Recent Actions</h2>
+          <button id="refreshBtn" class="link-button" type="button">Refresh</button>
+        </div>
+        <ol id="recentActions" class="recent-actions"></ol>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
   </body>
 </html>
