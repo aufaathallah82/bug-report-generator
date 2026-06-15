@@ -7,6 +7,13 @@ const MAX_ACTIONS = 500;
 const MAX_EVIDENCE = 250;
 const MAX_SCREENSHOTS = 5;
 const MAX_PAGE_SNAPSHOTS = 100;
+const DEFAULT_REPORT_METADATA = {
+  bugTitle: "",
+  description: "",
+  expectedResult: "",
+  actualResult: "",
+  additionalNotes: ""
+};
 
 let writeChain = Promise.resolve();
 
@@ -24,7 +31,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "STOP_RECORDING" || (message?.type === "STOP_CAPTURE" && !message.sessionId)) {
     stopRecording()
-      .then((session) => sendResponse({ ok: true, session }))
+      .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to stop recording.") }));
     return true;
   }
@@ -40,6 +47,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getSession()
       .then((session) => sendResponse({ ok: true, session }))
       .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to read recording state.") }));
+    return true;
+  }
+
+  if (message?.type === "UPDATE_REPORT_METADATA") {
+    updateReportMetadata(message.metadata)
+      .then((session) => sendResponse({ ok: true, session }))
+      .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to save report fields.") }));
+    return true;
+  }
+
+  if (message?.type === "SAVE_REPORT") {
+    saveReport(message.metadata)
+      .then((session) => sendResponse({ ok: true, session }))
+      .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to save report.") }));
     return true;
   }
 
@@ -92,6 +113,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "EXPORT_TXT") {
+    exportText()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to export TXT.") }));
+    return true;
+  }
+
   return false;
 });
 
@@ -137,8 +165,10 @@ async function startRecording() {
     currentSessionId: sessionId,
     startedAt: now,
     stoppedAt: null,
+    savedAt: null,
     currentUrl: tab.url || "",
     currentTitle: tab.title || "",
+    reportMetadata: { ...DEFAULT_REPORT_METADATA },
     environment: buildDefaultEnvironment(tab),
     recordedActions: [],
     consoleWarnings: [],
@@ -186,13 +216,25 @@ async function stopRecording() {
     console.warn(`${DEBUG_PREFIX} stop message failed; storage will still be marked stopped`, error);
   }
 
-  return updateSession((current) => {
+  let warning = "";
+
+  try {
+    await captureAndStoreScreenshot("stop-recording");
+  } catch (error) {
+    warning = `Recording stopped, but the automatic screenshot could not be captured: ${getErrorMessage(error, "Screenshot capture failed.")}`;
+    console.warn(`${DEBUG_PREFIX} automatic stop screenshot failed`, error);
+    await storeSessionWarning(session.sessionId, warning);
+  }
+
+  const stoppedSession = await updateSession((current) => {
     if (!current || current.sessionId !== session.sessionId) {
       return markStopped(session);
     }
 
     return markStopped(current);
   }, "stop-recording");
+
+  return { session: stoppedSession, warning };
 }
 
 async function clearSession() {
@@ -210,6 +252,74 @@ async function clearSession() {
   }
 
   await removeStorageValue(RECORDING_STATE_KEY);
+}
+
+async function updateReportMetadata(metadata) {
+  return updateSession((session) => {
+    if (!session) {
+      return session;
+    }
+
+    return trimSession({
+      ...session,
+      reportMetadata: normalizeReportMetadata({
+        ...(session.reportMetadata || {}),
+        ...(metadata || {})
+      })
+    });
+  }, "update-report-metadata");
+}
+
+async function saveReport(metadata) {
+  const savedAt = new Date().toISOString();
+  const savedSession = await updateSession((session) => {
+    if (!session) {
+      return session;
+    }
+
+    return trimSession({
+      ...session,
+      reportMetadata: normalizeReportMetadata({
+        ...(session.reportMetadata || {}),
+        ...(metadata || {})
+      }),
+      savedAt,
+      rawEvents: [
+        ...(session.rawEvents || []),
+        {
+          id: crypto.randomUUID(),
+          type: "report-saved",
+          timestamp: savedAt,
+          url: session.currentUrl,
+          title: session.currentTitle
+        }
+      ]
+    });
+  }, "save-report");
+
+  if (!savedSession) {
+    throw new Error("No bug recording session is available to save.");
+  }
+
+  return savedSession;
+}
+
+async function storeSessionWarning(sessionId, warning) {
+  if (!sessionId || !warning) {
+    return getSession();
+  }
+
+  return updateSession((session) => {
+    if (!session || session.sessionId !== sessionId) {
+      return session;
+    }
+
+    return trimSession({
+      ...session,
+      lastWarning: warning,
+      screenshotCaptureWarning: warning
+    });
+  }, "session-warning");
 }
 
 async function handleContentScriptReady(message, sender) {
@@ -561,7 +671,7 @@ async function exportJson() {
 
   const report = buildBugReportJson(session);
   const text = JSON.stringify(report, null, 2);
-  const filename = `bug-report-session-${formatTimestampForFile(new Date())}.json`;
+  const filename = `bug-report-${sanitizeFilename(session.sessionId || formatTimestampForFile(new Date()))}.json`;
 
   await downloadText(filename, "application/json", text);
   return { filename };
@@ -576,9 +686,24 @@ async function exportMarkdown() {
 
   const report = buildBugReportJson(session);
   const text = buildBugReportMarkdown(report);
-  const filename = `bug-report-${formatTimestampForFile(new Date())}.md`;
+  const filename = `bug-report-${sanitizeFilename(session.sessionId || formatTimestampForFile(new Date()))}.md`;
 
   await downloadText(filename, "text/markdown", text);
+  return { filename };
+}
+
+async function exportText() {
+  const session = await getSession();
+
+  if (!session) {
+    throw new Error("No bug recording session is available to export.");
+  }
+
+  const report = buildBugReportJson(session);
+  const text = buildBugReportText(report);
+  const filename = `bug-report-${sanitizeFilename(session.sessionId || formatTimestampForFile(new Date()))}.txt`;
+
+  await downloadText(filename, "text/plain", text);
   return { filename };
 }
 
@@ -587,6 +712,12 @@ function buildBugReportJson(session) {
     ...action,
     step: index + 1
   }));
+  const reportMetadata = normalizeReportMetadata(session.reportMetadata);
+  const environment = normalizeEnvironment(
+    session.environment || buildDefaultEnvironment({ url: session.currentUrl, title: session.currentTitle })
+  );
+  environment.url = session.currentUrl || environment.url || "";
+  environment.pageTitle = session.currentTitle || environment.pageTitle || "";
   const latestPage = session.visitedPages?.[session.visitedPages.length - 1];
   const affectedPage = latestPage?.title || session.currentTitle || session.currentUrl || "Current page";
   const allErrors = [
@@ -597,25 +728,29 @@ function buildBugReportJson(session) {
   const networkErrors = session.networkErrors || [];
   const severity = suggestSeverity(allErrors, networkErrors);
   const priority = allErrors.length || networkErrors.length ? "Medium" : "Low";
-  const titleSuggestion = suggestTitle(session, allErrors, networkErrors);
+  const titleSuggestion = reportMetadata.bugTitle || suggestTitle(session, allErrors, networkErrors);
 
   return {
     project: PRODUCT_NAME,
     sourceProject: SOURCE_PROJECT,
     exportType: "bug-report",
+    generatedAt: new Date().toISOString(),
     extensionMetadata: {
       name: PRODUCT_NAME,
       version: chrome.runtime.getManifest().version,
       architecture: "Plain JavaScript MV3 extension forked from AI-Test-Automation-Generator lifecycle."
     },
+    reportMetadata,
     session: {
       id: session.sessionId,
       startedAt: session.startedAt,
+      stoppedAt: session.stoppedAt || null,
       endedAt: session.stoppedAt || null,
+      savedAt: session.savedAt || null,
       status: session.isRecording ? "recording" : "stopped",
       activeRecordingTabId: session.activeRecordingTabId
     },
-    environment: session.environment || buildDefaultEnvironment({ url: session.currentUrl, title: session.currentTitle }),
+    environment,
     summary: {
       titleSuggestion,
       severitySuggestion: severity,
@@ -651,67 +786,117 @@ function buildBugReportJson(session) {
 }
 
 function buildBugReportMarkdown(report) {
-  const lastActions = report.actions.slice(-5);
+  const metadata = report.reportMetadata || DEFAULT_REPORT_METADATA;
+  const title = metadata.bugTitle || report.summary.titleSuggestion;
+  const description = metadata.description || "Not provided.";
+  const expectedResult = metadata.expectedResult || "Not provided.";
+  const actualResult = metadata.actualResult || buildActualResult(report);
+  const additionalNotes = metadata.additionalNotes || "None.";
+  const consoleEvidence = getCombinedConsoleEvidence(report);
 
   return [
-    `# Bug Report: ${report.summary.titleSuggestion}`,
+    `# Bug Report: ${title}`,
     "",
-    "## Summary",
-    `Recorded issue evidence on ${report.summary.affectedPage}. ${summarizeEvidence(report)}`,
-    "",
-    "## Environment",
-    `* URL: ${report.environment.url || report.visitedPages.at(-1)?.url || ""}`,
-    `* Browser: ${report.environment.browser || report.environment.browserName || "Chrome"}`,
-    `* User Agent: ${report.environment.userAgent || ""}`,
-    `* Viewport: ${formatViewport(report.environment.viewport)}`,
-    `* Timestamp: ${new Date().toISOString()}`,
-    "",
-    "## Severity",
-    `Suggested severity: ${report.summary.severitySuggestion}`,
-    "",
-    "## Priority",
-    `Suggested priority: ${report.summary.prioritySuggestion}`,
+    "## Description",
+    description,
     "",
     "## Steps to Reproduce",
     ...report.reproductionSteps.map((step) => `${step.step}. ${step.action}`),
     "",
-    "## Actual Result",
-    buildActualResult(report),
-    "",
     "## Expected Result",
-    "Placeholder for expected behavior.",
+    expectedResult,
     "",
-    "## Technical Evidence",
+    "## Actual Result",
+    actualResult,
     "",
-    "### Console Errors",
-    formatEvidenceList(report.consoleErrors),
+    "## Environment",
+    `- URL: ${getEnvironmentUrl(report)}`,
+    `- Browser: ${formatBrowser(report.environment)}`,
+    `- User Agent: ${report.environment.userAgent || ""}`,
+    `- OS/Platform: ${report.environment.osPlatform || report.environment.platform || ""}`,
+    `- Screen Size: ${formatScreen(report.environment.screen)}`,
+    `- Viewport: ${formatViewport(report.environment.viewport)}`,
+    `- Device Pixel Ratio: ${report.environment.devicePixelRatio || report.environment.viewport?.devicePixelRatio || ""}`,
+    `- Language: ${report.environment.language || ""}`,
+    `- Timestamp: ${report.environment.timestamp || report.environment.capturedAt || report.generatedAt}`,
+    `- Extension Version: ${report.environment.extensionVersion || report.extensionMetadata.version || ""}`,
     "",
-    "### JavaScript Errors",
-    formatEvidenceList(report.javascriptErrors),
+    "## Console Errors",
+    formatEvidenceList(consoleEvidence),
     "",
-    "### Promise Rejections",
-    formatEvidenceList(report.promiseRejections),
-    "",
-    "### Network Errors",
+    "## Network Errors",
     formatNetworkEvidenceList(report.networkErrors),
     "",
-    "### Last User Actions Before Error",
-    lastActions.length
-      ? lastActions.map((action) => `* Step ${action.step}: ${action.description || action.text || action.type}`).join("\n")
-      : "No user actions recorded.",
-    "",
     "## Screenshots",
-    report.screenshots.length
-      ? report.screenshots
-          .map((screenshot, index) => `* Screenshot ${index + 1}: ${screenshot.timestamp} - ${screenshot.reason} - ${screenshot.pageUrl}`)
-          .join("\n")
-      : "No screenshots captured.",
+    `- Screenshot count: ${report.screenshots.length}`,
+    ...formatScreenshotMarkdownList(report.screenshots),
     "",
-    "## Locator Hints",
-    formatLocatorHints(report.actions),
+    "## Session",
+    `- Session ID: ${report.session.id}`,
+    `- Started At: ${report.session.startedAt || ""}`,
+    `- Stopped At: ${report.session.stoppedAt || ""}`,
+    `- Saved At: ${report.session.savedAt || ""}`,
+    `- Exported At: ${report.generatedAt}`,
+    "",
+    "## Additional Notes",
+    additionalNotes,
     "",
     "## AI Notes",
     report.aiAnalysisNotes.join("\n")
+  ].join("\n");
+}
+
+function buildBugReportText(report) {
+  const metadata = report.reportMetadata || DEFAULT_REPORT_METADATA;
+  const title = metadata.bugTitle || report.summary.titleSuggestion;
+  const consoleEvidence = getCombinedConsoleEvidence(report);
+
+  return [
+    `BUG REPORT: ${title}`,
+    "",
+    "DESCRIPTION",
+    metadata.description || "Not provided.",
+    "",
+    "STEPS TO REPRODUCE",
+    ...report.reproductionSteps.map((step) => `${step.step}. ${step.action}`),
+    "",
+    "EXPECTED RESULT",
+    metadata.expectedResult || "Not provided.",
+    "",
+    "ACTUAL RESULT",
+    metadata.actualResult || buildActualResult(report),
+    "",
+    "ENVIRONMENT",
+    `URL: ${getEnvironmentUrl(report)}`,
+    `Browser: ${formatBrowser(report.environment)}`,
+    `User Agent: ${report.environment.userAgent || ""}`,
+    `OS/Platform: ${report.environment.osPlatform || report.environment.platform || ""}`,
+    `Screen Size: ${formatScreen(report.environment.screen)}`,
+    `Viewport: ${formatViewport(report.environment.viewport)}`,
+    `Device Pixel Ratio: ${report.environment.devicePixelRatio || report.environment.viewport?.devicePixelRatio || ""}`,
+    `Language: ${report.environment.language || ""}`,
+    `Timestamp: ${report.environment.timestamp || report.environment.capturedAt || report.generatedAt}`,
+    `Extension Version: ${report.environment.extensionVersion || report.extensionMetadata.version || ""}`,
+    "",
+    "CONSOLE ERRORS",
+    formatPlainEvidenceList(consoleEvidence),
+    "",
+    "NETWORK ERRORS",
+    formatPlainNetworkEvidenceList(report.networkErrors),
+    "",
+    "SCREENSHOTS",
+    `Screenshot count: ${report.screenshots.length}`,
+    ...formatScreenshotTextList(report.screenshots),
+    "",
+    "SESSION",
+    `Session ID: ${report.session.id}`,
+    `Started At: ${report.session.startedAt || ""}`,
+    `Stopped At: ${report.session.stoppedAt || ""}`,
+    `Saved At: ${report.session.savedAt || ""}`,
+    `Exported At: ${report.generatedAt}`,
+    "",
+    "ADDITIONAL NOTES",
+    metadata.additionalNotes || "None."
   ].join("\n");
 }
 
@@ -908,6 +1093,85 @@ function formatNetworkEvidenceList(items) {
   return items
     .map((item, index) => `${index + 1}. ${item.method || "GET"} ${item.requestUrl || ""} - ${item.status || "failed"} ${item.failureReason || ""}\n   Time: ${item.timestamp}`)
     .join("\n\n");
+}
+
+function formatPlainEvidenceList(items) {
+  if (!items.length) {
+    return "No entries captured.";
+  }
+
+  return items
+    .map((item, index) => {
+      const location = item.source ? ` (${item.source}${item.line ? `:${item.line}` : ""})` : "";
+      return `${index + 1}. [${item.level || item.category}] ${item.message || item.failureReason || "Unknown"}${location}\n   Time: ${item.timestamp}`;
+    })
+    .join("\n\n");
+}
+
+function formatPlainNetworkEvidenceList(items) {
+  if (!items.length) {
+    return "No entries captured.";
+  }
+
+  return items
+    .map((item, index) => `${index + 1}. ${item.method || "GET"} ${item.requestUrl || ""} - ${item.status || "failed"} ${item.failureReason || ""}\n   Time: ${item.timestamp}`)
+    .join("\n\n");
+}
+
+function getCombinedConsoleEvidence(report) {
+  return [
+    ...(report.consoleErrors || []),
+    ...(report.javascriptErrors || []),
+    ...(report.promiseRejections || [])
+  ];
+}
+
+function getEnvironmentUrl(report) {
+  const visitedPages = report.visitedPages || [];
+  const latestPage = visitedPages[visitedPages.length - 1];
+  return report.environment?.url || latestPage?.url || "";
+}
+
+function formatBrowser(environment) {
+  if (!environment) {
+    return "";
+  }
+
+  if (environment.browser) {
+    return environment.browser;
+  }
+
+  return [environment.browserName, environment.browserVersion].filter(Boolean).join(" ");
+}
+
+function formatScreen(screen) {
+  if (!screen) {
+    return "";
+  }
+
+  return `${screen.width || 0} x ${screen.height || 0}`;
+}
+
+function formatScreenshotMarkdownList(screenshots) {
+  if (!screenshots.length) {
+    return ["- Captured at: None"];
+  }
+
+  return screenshots.map(
+    (screenshot, index) =>
+      `- Screenshot ${index + 1}: captured at ${screenshot.timestamp || ""}; reason: ${screenshot.reason || ""}; URL: ${screenshot.pageUrl || ""}; data URL included in JSON: ${screenshot.dataUrl ? "yes" : "no"}`
+  );
+}
+
+function formatScreenshotTextList(screenshots) {
+  if (!screenshots.length) {
+    return ["Captured at: None"];
+  }
+
+  return screenshots.map(
+    (screenshot, index) =>
+      `Screenshot ${index + 1}: captured at ${screenshot.timestamp || ""}; reason: ${screenshot.reason || ""}; URL: ${screenshot.pageUrl || ""}; data URL included in JSON: ${screenshot.dataUrl ? "yes" : "no"}`
+  );
 }
 
 function formatLocatorHints(actions) {
@@ -1110,10 +1374,14 @@ function buildVisitedPage(url, title, reason) {
 
 function buildDefaultEnvironment(tab) {
   const userAgent = navigator.userAgent || "";
+  const browserName = detectBrowserName(userAgent);
+  const browserVersion = detectBrowserVersion(userAgent, browserName);
+  const now = new Date().toISOString();
 
   return {
-    browser: detectBrowserName(userAgent),
-    browserName: detectBrowserName(userAgent),
+    browser: [browserName, browserVersion].filter(Boolean).join(" "),
+    browserName,
+    browserVersion,
     userAgent,
     url: tab.url || "",
     pageTitle: tab.title || "",
@@ -1130,27 +1398,84 @@ function buildDefaultEnvironment(tab) {
       colorDepth: 0
     },
     platform: navigator.platform || "",
+    osPlatform: navigator.platform || "",
     language: navigator.language || "",
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
-    capturedAt: new Date().toISOString()
+    devicePixelRatio: 0,
+    timestamp: now,
+    capturedAt: now,
+    extensionVersion: getExtensionVersion()
   };
 }
 
 function buildEnvironmentFromSnapshot(snapshot, fallback) {
   const userAgent = snapshot.userAgent || fallback?.userAgent || navigator.userAgent || "";
+  const browserName = detectBrowserName(userAgent);
+  const browserVersion = detectBrowserVersion(userAgent, browserName);
+  const viewport = snapshot.viewport || fallback?.viewport || { width: 0, height: 0, devicePixelRatio: 0 };
+  const timestamp = snapshot.timestamp || fallback?.timestamp || fallback?.capturedAt || new Date().toISOString();
 
   return {
-    browser: detectBrowserName(userAgent),
-    browserName: detectBrowserName(userAgent),
+    browser: [browserName, browserVersion].filter(Boolean).join(" "),
+    browserName,
+    browserVersion,
     userAgent,
     url: snapshot.url || fallback?.url || "",
     pageTitle: snapshot.title || fallback?.pageTitle || "",
-    viewport: snapshot.viewport || fallback?.viewport || { width: 0, height: 0, devicePixelRatio: 0 },
+    viewport,
     screen: snapshot.screen || fallback?.screen || {},
     platform: snapshot.platform || fallback?.platform || "",
+    osPlatform: snapshot.platform || fallback?.osPlatform || fallback?.platform || "",
     language: snapshot.language || fallback?.language || "",
     timeZone: snapshot.timeZone || fallback?.timeZone || "",
-    capturedAt: snapshot.timestamp || new Date().toISOString()
+    devicePixelRatio: viewport.devicePixelRatio || fallback?.devicePixelRatio || 0,
+    timestamp,
+    capturedAt: timestamp,
+    extensionVersion: getExtensionVersion()
+  };
+}
+
+function normalizeReportMetadata(value) {
+  return {
+    bugTitle: sanitizeMetadataField(value?.bugTitle),
+    description: sanitizeMetadataField(value?.description),
+    expectedResult: sanitizeMetadataField(value?.expectedResult),
+    actualResult: sanitizeMetadataField(value?.actualResult),
+    additionalNotes: sanitizeMetadataField(value?.additionalNotes)
+  };
+}
+
+function sanitizeMetadataField(value) {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeEnvironment(value) {
+  const fallback = buildDefaultEnvironment({ url: "", title: "" });
+  const source = value && typeof value === "object" ? value : fallback;
+  const userAgent = source.userAgent || fallback.userAgent || "";
+  const browserName = source.browserName || detectBrowserName(userAgent);
+  const browserVersion = source.browserVersion || detectBrowserVersion(userAgent, browserName);
+  const viewport = source.viewport || fallback.viewport;
+  const timestamp = source.timestamp || source.capturedAt || fallback.timestamp;
+
+  return {
+    ...source,
+    browser: source.browser || [browserName, browserVersion].filter(Boolean).join(" "),
+    browserName,
+    browserVersion,
+    userAgent,
+    url: source.url || "",
+    pageTitle: source.pageTitle || "",
+    viewport,
+    screen: source.screen || fallback.screen,
+    platform: source.platform || "",
+    osPlatform: source.osPlatform || source.platform || "",
+    language: source.language || "",
+    timeZone: source.timeZone || "",
+    devicePixelRatio: source.devicePixelRatio || viewport?.devicePixelRatio || 0,
+    timestamp,
+    capturedAt: source.capturedAt || timestamp,
+    extensionVersion: source.extensionVersion || getExtensionVersion()
   };
 }
 
@@ -1212,6 +1537,9 @@ function normalizeSession(value) {
     activeRecordingTabId: typeof value.activeRecordingTabId === "number" ? value.activeRecordingTabId : null,
     sessionId: typeof value.sessionId === "string" ? value.sessionId : value.currentSessionId || null,
     currentSessionId: value.currentSessionId || value.sessionId || null,
+    savedAt: value.savedAt || null,
+    reportMetadata: normalizeReportMetadata(value.reportMetadata),
+    environment: normalizeEnvironment(value.environment),
     recordedActions: Array.isArray(value.recordedActions) ? value.recordedActions : [],
     consoleWarnings: Array.isArray(value.consoleWarnings) ? value.consoleWarnings : [],
     consoleErrors: Array.isArray(value.consoleErrors) ? value.consoleErrors : [],
@@ -1221,7 +1549,9 @@ function normalizeSession(value) {
     screenshots: Array.isArray(value.screenshots) ? value.screenshots : [],
     visitedPages: Array.isArray(value.visitedPages) ? value.visitedPages : [],
     pageLoadSnapshots: Array.isArray(value.pageLoadSnapshots) ? value.pageLoadSnapshots : [],
-    rawEvents: Array.isArray(value.rawEvents) ? value.rawEvents : []
+    rawEvents: Array.isArray(value.rawEvents) ? value.rawEvents : [],
+    lastWarning: value.lastWarning || "",
+    screenshotCaptureWarning: value.screenshotCaptureWarning || ""
   };
 }
 
@@ -1482,6 +1812,22 @@ function detectBrowserName(userAgent) {
   return "Unknown browser";
 }
 
+function detectBrowserVersion(userAgent, browserName) {
+  const patterns = {
+    "Microsoft Edge": /Edg\/([\d.]+)/,
+    Opera: /(?:OPR|Opera)\/([\d.]+)/,
+    "Google Chrome": /Chrome\/([\d.]+)/,
+    Firefox: /Firefox\/([\d.]+)/,
+    Safari: /Version\/([\d.]+).*Safari/
+  };
+  const match = userAgent.match(patterns[browserName] || /(?:Chrome|Firefox|Version)\/([\d.]+)/);
+  return match?.[1] || "";
+}
+
+function getExtensionVersion() {
+  return chrome.runtime.getManifest().version || "";
+}
+
 function withoutDataUrl(screenshot) {
   const { dataUrl, ...rest } = screenshot;
   return {
@@ -1502,6 +1848,11 @@ function formatTimestampForFile(date) {
     pad(date.getMinutes()),
     pad(date.getSeconds())
   ].join("");
+}
+
+function sanitizeFilename(value) {
+  const text = String(value || "").replace(/[^a-zA-Z0-9._-]/g, "-");
+  return text || formatTimestampForFile(new Date());
 }
 
 function truncate(value, maxLength) {

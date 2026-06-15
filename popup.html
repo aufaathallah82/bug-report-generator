@@ -10,7 +10,7 @@
     <main class="popup">
       <header class="popup-header">
         <div>
-          <p class="eyebrow">AI-ready QA evidence</p>
+          <p class="eyebrow">QA evidence recorder</p>
           <h1>BugReportGenerator</h1>
         </div>
         <span id="recordingPill" class="state-pill" data-state="idle">Idle</span>
@@ -18,51 +18,150 @@
 
       <p id="status" class="status" role="status" aria-live="polite">Loading recording state...</p>
 
-      <section class="actions" aria-label="Recording actions">
-        <button id="startRecordingBtn" class="primary-button" type="button">Start Bug Recording</button>
-        <button id="stopRecordingBtn" class="secondary-button" type="button">Stop Recording</button>
-        <button id="captureScreenshotBtn" class="secondary-button" type="button">Capture Screenshot</button>
-        <button id="exportJsonBtn" class="secondary-button" type="button">Export JSON</button>
-        <button id="exportMarkdownBtn" class="secondary-button" type="button">Export Markdown</button>
-        <button id="clearSessionBtn" class="danger-button" type="button">Clear Session</button>
+      <nav class="page-tabs" aria-label="Popup pages">
+        <button id="recordingTab" class="page-tab" type="button" data-page="recording" aria-controls="recordingPage">
+          Recording
+        </button>
+        <button id="exportTab" class="page-tab" type="button" data-page="export" aria-controls="exportPage">
+          Export
+        </button>
+      </nav>
+
+      <section id="recordingPage" class="page-panel" data-page-panel="recording">
+        <section class="actions" aria-label="Recording controls">
+          <button id="startRecordingBtn" class="primary-button" type="button">Start Bug Recording</button>
+          <button id="stopRecordingBtn" class="secondary-button" type="button">Stop Recording</button>
+          <button id="clearSessionBtn" class="danger-button" type="button">Clear Session</button>
+        </section>
+
+        <section class="summary-panel" aria-labelledby="summaryTitle">
+          <h2 id="summaryTitle">Current Session</h2>
+          <dl class="summary">
+            <div class="wide">
+              <dt>URL</dt>
+              <dd id="currentUrl">-</dd>
+            </div>
+            <div>
+              <dt>Actions</dt>
+              <dd id="actionCount">0</dd>
+            </div>
+            <div>
+              <dt>Console Errors</dt>
+              <dd id="consoleErrorCount">0</dd>
+            </div>
+            <div>
+              <dt>Network Errors</dt>
+              <dd id="networkErrorCount">0</dd>
+            </div>
+            <div>
+              <dt>Screenshots</dt>
+              <dd id="screenshotCount">0</dd>
+            </div>
+            <div>
+              <dt>Session</dt>
+              <dd id="sessionId">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="form-panel" aria-labelledby="metadataTitle">
+          <div class="section-heading">
+            <h2 id="metadataTitle">Bug Report Metadata</h2>
+            <button class="link-button" type="button" data-action="save-report">Save Report</button>
+          </div>
+          <form id="metadataForm" class="metadata-form">
+            <label>
+              <span>Bug Title</span>
+              <input id="bugTitle" name="bugTitle" type="text" autocomplete="off" />
+            </label>
+            <label>
+              <span>Description</span>
+              <textarea id="description" name="description" rows="3"></textarea>
+            </label>
+            <label>
+              <span>Expected Result</span>
+              <textarea id="expectedResult" name="expectedResult" rows="2"></textarea>
+            </label>
+            <label>
+              <span>Actual Result / Reality</span>
+              <textarea id="actualResult" name="actualResult" rows="2"></textarea>
+            </label>
+            <label>
+              <span>Additional Notes</span>
+              <textarea id="additionalNotes" name="additionalNotes" rows="2"></textarea>
+            </label>
+          </form>
+        </section>
+
+        <section class="environment-panel" aria-labelledby="environmentTitle">
+          <h2 id="environmentTitle">Device Environment</h2>
+          <dl class="environment-list">
+            <div>
+              <dt>Browser</dt>
+              <dd id="envBrowser">-</dd>
+            </div>
+            <div>
+              <dt>Platform</dt>
+              <dd id="envPlatform">-</dd>
+            </div>
+            <div>
+              <dt>Screen</dt>
+              <dd id="envScreen">-</dd>
+            </div>
+            <div>
+              <dt>Viewport</dt>
+              <dd id="envViewport">-</dd>
+            </div>
+            <div>
+              <dt>DPR</dt>
+              <dd id="envDpr">-</dd>
+            </div>
+            <div>
+              <dt>Language</dt>
+              <dd id="envLanguage">-</dd>
+            </div>
+            <div>
+              <dt>Timestamp</dt>
+              <dd id="envTimestamp">-</dd>
+            </div>
+            <div>
+              <dt>Extension</dt>
+              <dd id="envExtensionVersion">-</dd>
+            </div>
+            <div class="wide">
+              <dt>User Agent</dt>
+              <dd id="envUserAgent">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="timeline-panel" aria-labelledby="timelineTitle">
+          <div class="section-heading">
+            <h2 id="timelineTitle">Recent Actions</h2>
+            <button id="refreshBtn" class="link-button" type="button">Refresh</button>
+          </div>
+          <ol id="recentActions" class="recent-actions"></ol>
+        </section>
       </section>
 
-      <section class="summary-panel" aria-labelledby="summaryTitle">
-        <h2 id="summaryTitle">Current Session</h2>
-        <dl class="summary">
-          <div>
-            <dt>URL</dt>
-            <dd id="currentUrl">-</dd>
-          </div>
-          <div>
-            <dt>Actions</dt>
-            <dd id="actionCount">0</dd>
-          </div>
-          <div>
-            <dt>Console Errors</dt>
-            <dd id="consoleErrorCount">0</dd>
-          </div>
-          <div>
-            <dt>Network Errors</dt>
-            <dd id="networkErrorCount">0</dd>
-          </div>
-          <div>
-            <dt>Screenshots</dt>
-            <dd id="screenshotCount">0</dd>
-          </div>
-          <div>
-            <dt>Session</dt>
-            <dd id="sessionId">-</dd>
-          </div>
-        </dl>
-      </section>
+      <section id="exportPage" class="page-panel" data-page-panel="export" hidden>
+        <section class="actions export-actions" aria-label="Save and export">
+          <button class="primary-button" type="button" data-action="save-report">Save Report</button>
+          <button id="exportJsonBtn" class="secondary-button" type="button">Export JSON</button>
+          <button id="exportMarkdownBtn" class="secondary-button" type="button">Export Markdown</button>
+          <button id="exportTxtBtn" class="secondary-button" type="button">Export TXT</button>
+        </section>
 
-      <section class="timeline-panel" aria-labelledby="timelineTitle">
-        <div class="section-heading">
-          <h2 id="timelineTitle">Recent Actions</h2>
-          <button id="refreshBtn" class="link-button" type="button">Refresh</button>
-        </div>
-        <ol id="recentActions" class="recent-actions"></ol>
+        <section class="screenshot-panel" aria-labelledby="screenshotTitle">
+          <h2 id="screenshotTitle">Screenshot</h2>
+          <p id="screenshotStatus" class="muted-text">No screenshot captured yet.</p>
+          <img id="screenshotPreview" class="screenshot-preview" alt="Latest captured screenshot preview" hidden />
+        </section>
+
+        <section class="summary-panel" aria-labelledby="exportSummaryTitle">
+          <h2 id="exportSummaryTitle">Full Session Summary</h2>
+          <dl id="exportSummary" class="summary export-summary"></dl>
+        </section>
       </section>
     </main>
 
