@@ -6,9 +6,28 @@
   const MAX_TEXT_LENGTH = 160;
   const MAX_VALUE_LENGTH = 160;
   const MAX_ATTRIBUTES = 30;
+  const HTML_SNIPPET_MAX_LENGTH = 1000;
+  const MAX_HTML_ATTRIBUTE_LENGTH = 160;
+  const MAX_HTML_CLASS_NAMES = 4;
   const TRACKED_KEYS = new Set(["Enter", "Tab"]);
-  const SENSITIVE_FIELD_TOKENS = ["password", "token", "secret", "api_key", "authorization", "credential"];
+  const SENSITIVE_FIELD_TOKENS = ["password", "token", "secret", "api_key", "api-key", "apikey", "authorization", "credential"];
   const TEST_ID_ATTRIBUTES = ["data-testid", "data-test", "data-qa", "data-cy"];
+  const HTML_SNIPPET_FORM_ATTRIBUTES = [
+    ...TEST_ID_ATTRIBUTES,
+    "id",
+    "name",
+    "type",
+    "placeholder",
+    "aria-label",
+    "role",
+    "value",
+    "checked",
+    "selected",
+    "disabled",
+    "readonly",
+    "required",
+    "autocomplete"
+  ];
 
   const state = window[GLOBAL_KEY] || {
     installed: false,
@@ -394,6 +413,7 @@
       tabId: state.activeTabId,
       key: type === "enter_key" ? "Enter" : type === "tab_key" ? "Tab" : "",
       value,
+      htmlSnippet: elementContext.element.htmlSnippet || "",
       element: elementContext.element,
       locators: elementContext.locators,
       target: {
@@ -513,6 +533,7 @@
     const nearbyText = getNearbyText(element);
     const parentContext = getParentContext(element);
     const safeValue = value || getStaticSafeElementValue(element);
+    const htmlSnippet = getCleanHtmlSnippet(element);
     const locators = generateLocatorCandidates(element, {
       tag,
       text,
@@ -532,9 +553,15 @@
         attributes,
         domPath,
         nearbyText,
-        parentContext
+        parentContext,
+        htmlSnippet
       },
-      locators
+      locators: htmlSnippet
+        ? {
+            ...locators,
+            html: htmlSnippet
+          }
+        : locators
     };
   }
 
@@ -871,7 +898,8 @@
       element.id,
       element.getAttribute("placeholder"),
       element.getAttribute("aria-label"),
-      element.getAttribute("autocomplete")
+      element.getAttribute("autocomplete"),
+      ...TEST_ID_ATTRIBUTES.map((attribute) => element.getAttribute(attribute))
     ]
       .filter(Boolean)
       .join(" ")
@@ -909,6 +937,212 @@
     }
 
     return attributes;
+  }
+
+  function getCleanHtmlSnippet(element) {
+    if (!(element instanceof Element)) {
+      return "";
+    }
+
+    const source = String(element.outerHTML || "").trim();
+
+    if (!source) {
+      return "";
+    }
+
+    const template = document.createElement("template");
+    template.innerHTML = source;
+
+    const clone = template.content.firstElementChild;
+
+    if (!clone) {
+      return truncateHtmlSnippet(normalizeSnippetWhitespace(source));
+    }
+
+    cleanHtmlSnippetNode(clone, element, true);
+
+    let snippet = normalizeSnippetWhitespace(clone.outerHTML);
+
+    if (snippet.length > HTML_SNIPPET_MAX_LENGTH && clone.children.length) {
+      collapseSnippetChildren(clone);
+      snippet = normalizeSnippetWhitespace(clone.outerHTML);
+    }
+
+    return truncateHtmlSnippet(snippet);
+  }
+
+  function cleanHtmlSnippetNode(node, sourceElement, isRoot) {
+    if (!(node instanceof Element)) {
+      return;
+    }
+
+    cleanHtmlSnippetAttributes(node, sourceElement, isRoot);
+
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        child.remove();
+        continue;
+      }
+
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = String(child.textContent || "").replace(/\s+/g, " ");
+        child.textContent = text.length > MAX_TEXT_LENGTH ? `${text.slice(0, MAX_TEXT_LENGTH - 3)}...` : text;
+        continue;
+      }
+
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        cleanHtmlSnippetNode(child, null, false);
+      }
+    }
+  }
+
+  function cleanHtmlSnippetAttributes(element, sourceElement, isRoot) {
+    const tag = element.tagName.toLowerCase();
+    const isFormControl = ["input", "textarea", "select", "button", "option"].includes(tag);
+    const allowedFormAttributes = new Set(HTML_SNIPPET_FORM_ATTRIBUTES);
+    const isSensitive =
+      (isRoot && sourceElement instanceof Element && isSensitiveElement(sourceElement)) ||
+      isSensitiveSnippetElement(element);
+
+    for (const attribute of Array.from(element.attributes || [])) {
+      const name = attribute.name.toLowerCase();
+
+      if (/^on/i.test(name) || name === "style") {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+
+      if (name === "class") {
+        if (isFormControl) {
+          element.removeAttribute(attribute.name);
+        } else {
+          sanitizeHtmlClassAttribute(element, attribute.name, attribute.value);
+        }
+
+        continue;
+      }
+
+      if (isFormControl && !allowedFormAttributes.has(name)) {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+
+      if (name === "value" && isSensitive) {
+        element.setAttribute(attribute.name, "[REDACTED]");
+        continue;
+      }
+
+      if (isSensitiveHtmlAttributeName(name)) {
+        element.setAttribute(attribute.name, "[REDACTED]");
+        continue;
+      }
+
+      element.setAttribute(attribute.name, trimHtmlAttribute(attribute.value));
+    }
+
+    if (
+      isRoot &&
+      isSensitive &&
+      sourceElement instanceof HTMLInputElement &&
+      sourceElement.value &&
+      !["button", "submit", "reset"].includes(sourceElement.type.toLowerCase())
+    ) {
+      element.setAttribute("value", "[REDACTED]");
+    }
+
+    orderHtmlSnippetAttributes(element);
+  }
+
+  function sanitizeHtmlClassAttribute(element, attributeName, value) {
+    const classNames = String(value || "")
+      .split(/\s+/)
+      .filter(Boolean);
+    const stableClassNames = classNames
+      .filter((className) => !looksGeneratedValue(className))
+      .slice(0, MAX_HTML_CLASS_NAMES);
+
+    if (!stableClassNames.length) {
+      element.removeAttribute(attributeName);
+      return;
+    }
+
+    element.setAttribute(attributeName, stableClassNames.join(" "));
+  }
+
+  function isSensitiveSnippetElement(element) {
+    const searchableValue = [
+      element.getAttribute("type"),
+      element.getAttribute("name"),
+      element.id,
+      element.getAttribute("placeholder"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("autocomplete"),
+      ...TEST_ID_ATTRIBUTES.map((attribute) => element.getAttribute(attribute))
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return searchableValue.includes("password") || SENSITIVE_FIELD_TOKENS.some((token) => searchableValue.includes(token));
+  }
+
+  function isSensitiveHtmlAttributeName(name) {
+    return /(?:token|secret|api[-_]?key|authorization|credential)/i.test(name);
+  }
+
+  function orderHtmlSnippetAttributes(element) {
+    const preferredOrder = [...HTML_SNIPPET_FORM_ATTRIBUTES, "href", "title", "alt", "for", "class"];
+    const attributes = Array.from(element.attributes || []).map((attribute, index) => ({
+      name: attribute.name,
+      value: attribute.value,
+      index
+    }));
+
+    if (attributes.length < 2) {
+      return;
+    }
+
+    attributes.sort((left, right) => {
+      const leftRank = preferredOrder.includes(left.name) ? preferredOrder.indexOf(left.name) : preferredOrder.length + left.index;
+      const rightRank = preferredOrder.includes(right.name) ? preferredOrder.indexOf(right.name) : preferredOrder.length + right.index;
+      return leftRank - rightRank;
+    });
+
+    for (const attribute of Array.from(element.attributes || [])) {
+      element.removeAttribute(attribute.name);
+    }
+
+    for (const attribute of attributes) {
+      element.setAttribute(attribute.name, attribute.value);
+    }
+  }
+
+  function collapseSnippetChildren(element) {
+    const text = normalizeText(element.textContent || "");
+
+    while (element.firstChild) {
+      element.removeChild(element.firstChild);
+    }
+
+    if (text) {
+      element.appendChild(document.createTextNode(text));
+    }
+  }
+
+  function trimHtmlAttribute(value) {
+    const normalized = normalizeSnippetWhitespace(value);
+    return normalized.length > MAX_HTML_ATTRIBUTE_LENGTH
+      ? `${normalized.slice(0, MAX_HTML_ATTRIBUTE_LENGTH - 3)}...`
+      : normalized;
+  }
+
+  function truncateHtmlSnippet(value) {
+    const text = String(value || "").trim();
+    return text.length > HTML_SNIPPET_MAX_LENGTH ? `${text.slice(0, HTML_SNIPPET_MAX_LENGTH - 3)}...` : text;
+  }
+
+  function normalizeSnippetWhitespace(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
   }
 
   function trimAttribute(value) {

@@ -357,6 +357,81 @@ h2 {
   font-size: 11px;
 }
 
+.action-strategy {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.action-details {
+  margin-top: 4px;
+}
+
+.action-details summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.action-evidence-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.action-evidence-list div {
+  min-width: 0;
+  border: 1px solid #e8edf3;
+  border-radius: 6px;
+  padding: 6px;
+  background: #f8fafc;
+}
+
+.action-evidence-list .wide {
+  grid-column: 1 / -1;
+}
+
+.action-evidence-list dt {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.action-evidence-list dd {
+  overflow: hidden;
+  margin: 2px 0 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.copy-evidence-button {
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: #fff;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.copy-evidence-button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
 .recent-actions code {
   color: var(--muted);
   font-family: var(--mono);
