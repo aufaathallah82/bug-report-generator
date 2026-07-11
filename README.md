@@ -44,6 +44,7 @@ BugReportGenerator is designed to help with:
     * JSON
     * Markdown
     * TXT
+    * DOCX
 * Include locator hints and DOM context for recorded elements.
 * Provide AI-ready QA evidence for future bug analysis or automation workflows.
 

@@ -1,3 +1,5 @@
+importScripts("vendor/docx.iife.js");
+
 const PRODUCT_NAME = "BugReportGenerator";
 const SOURCE_PROJECT = "AI-Test-Automation-Generator";
 const RECORDING_STATE_KEY = "bugReportGenerator.recordingState";
@@ -8,6 +10,7 @@ const MAX_EVIDENCE = 250;
 const MAX_SCREENSHOTS = 5;
 const MAX_PAGE_SNAPSHOTS = 100;
 const MAX_HTML_SNIPPET_LENGTH = 1000;
+const DOCX_IMAGE_WIDTH = 600;
 const LOCATOR_EVIDENCE_ACTION_TYPES = new Set(["click", "input", "change", "submit", "enter_key", "tab_key"]);
 const DEFAULT_REPORT_METADATA = {
   bugTitle: "",
@@ -119,6 +122,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     exportText()
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to export TXT.") }));
+    return true;
+  }
+
+  if (message?.type === "EXPORT_DOCX") {
+    exportDocx()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error, "Unable to export DOCX.") }));
     return true;
   }
 
@@ -709,6 +719,22 @@ async function exportText() {
   return { filename };
 }
 
+async function exportDocx() {
+  const session = await getSession();
+
+  if (!session) {
+    throw new Error("No bug recording session is available to export.");
+  }
+
+  const report = buildBugReportJson(session);
+  const document = buildBugReportDocx(report);
+  const base64 = await docx.Packer.toBase64String(document);
+  const filename = `bug-report-${sanitizeFilename(session.sessionId || formatTimestampForFile(new Date()))}.docx`;
+
+  await downloadBase64(filename, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", base64);
+  return { filename };
+}
+
 function buildBugReportJson(session) {
   const actions = (session.recordedActions || []).map((action, index) => buildExportAction(action, index + 1));
   const reportMetadata = normalizeReportMetadata(session.reportMetadata);
@@ -928,6 +954,249 @@ function buildBugReportText(report) {
     "ADDITIONAL NOTES",
     metadata.additionalNotes || "None."
   ].join("\n");
+}
+
+function buildBugReportDocx(report) {
+  const metadata = report.reportMetadata || DEFAULT_REPORT_METADATA;
+  const title = metadata.bugTitle || report.summary.titleSuggestion;
+  const consoleEvidence = getCombinedConsoleEvidence(report);
+  const children = [
+    createDocxHeading("BUG REPORT"),
+    createDocxLabelValue("Bug Title", title),
+    createDocxSpacer(),
+    createDocxHeading("DESCRIPTION"),
+    ...createDocxTextBlock(metadata.description || "Not provided."),
+    createDocxHeading("STEPS TO REPRODUCE"),
+    ...report.reproductionSteps.map((step) => createDocxParagraph(`${step.step}. ${step.action}`)),
+    createDocxSpacer(),
+    createDocxHeading("LOCATOR EVIDENCE"),
+    ...formatLocatorEvidenceDocx(report),
+    createDocxHeading("EXPECTED RESULT"),
+    ...createDocxTextBlock(metadata.expectedResult || "Not provided."),
+    createDocxHeading("ACTUAL RESULT"),
+    ...createDocxTextBlock(metadata.actualResult || buildActualResult(report)),
+    createDocxHeading("ENVIRONMENT"),
+    createDocxParagraph(`URL: ${getEnvironmentUrl(report)}`),
+    createDocxParagraph(`Browser: ${formatBrowser(report.environment)}`),
+    createDocxParagraph(`User Agent: ${report.environment.userAgent || ""}`),
+    createDocxParagraph(`OS/Platform: ${report.environment.osPlatform || report.environment.platform || ""}`),
+    createDocxParagraph(`Screen Size: ${formatScreen(report.environment.screen)}`),
+    createDocxParagraph(`Viewport: ${formatViewport(report.environment.viewport)}`),
+    createDocxParagraph(`Device Pixel Ratio: ${report.environment.devicePixelRatio || report.environment.viewport?.devicePixelRatio || ""}`),
+    createDocxParagraph(`Language: ${report.environment.language || ""}`),
+    createDocxParagraph(`Timestamp: ${report.environment.timestamp || report.environment.capturedAt || report.generatedAt}`),
+    createDocxParagraph(`Extension Version: ${report.environment.extensionVersion || report.extensionMetadata.version || ""}`),
+    createDocxSpacer(),
+    createDocxHeading("CONSOLE ERRORS"),
+    ...createDocxTextBlock(formatPlainEvidenceList(consoleEvidence)),
+    createDocxHeading("NETWORK ERRORS"),
+    ...createDocxTextBlock(formatPlainNetworkEvidenceList(report.networkErrors)),
+    createDocxHeading("SCREENSHOTS"),
+    createDocxParagraph(`Screenshot count: ${report.screenshots.length}`),
+    ...formatScreenshotsDocx(report.screenshots),
+    createDocxHeading("SESSION"),
+    createDocxParagraph(`Session ID: ${report.session.id}`),
+    createDocxParagraph(`Started At: ${report.session.startedAt || ""}`),
+    createDocxParagraph(`Stopped At: ${report.session.stoppedAt || ""}`),
+    createDocxParagraph(`Saved At: ${report.session.savedAt || ""}`),
+    createDocxParagraph(`Exported At: ${report.generatedAt}`),
+    createDocxSpacer(),
+    createDocxHeading("ADDITIONAL NOTES"),
+    ...createDocxTextBlock(metadata.additionalNotes || "None.")
+  ];
+
+  return new docx.Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: {
+              top: 720,
+              right: 720,
+              bottom: 720,
+              left: 720
+            }
+          }
+        },
+        children
+      }
+    ]
+  });
+}
+
+function createDocxHeading(text) {
+  return new docx.Paragraph({
+    heading: docx.HeadingLevel.HEADING_1,
+    spacing: { before: 240, after: 120 },
+    children: [
+      new docx.TextRun({
+        text,
+        bold: true
+      })
+    ]
+  });
+}
+
+function createDocxParagraph(text, options = {}) {
+  const { font = "Aptos", ...paragraphOptions } = options;
+
+  return new docx.Paragraph({
+    spacing: { after: 80 },
+    ...paragraphOptions,
+    children: [
+      new docx.TextRun({
+        text: String(text || ""),
+        font
+      })
+    ]
+  });
+}
+
+function createDocxLabelValue(label, value) {
+  return new docx.Paragraph({
+    spacing: { after: 80 },
+    children: [
+      new docx.TextRun({
+        text: `${label}: `,
+        bold: true
+      }),
+      new docx.TextRun(String(value || ""))
+    ]
+  });
+}
+
+function createDocxSpacer() {
+  return new docx.Paragraph({
+    spacing: { after: 120 },
+    children: [new docx.TextRun("")]
+  });
+}
+
+function createDocxTextBlock(text, options = {}) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd());
+
+  return lines.length
+    ? lines.map((line) => createDocxParagraph(line, options))
+    : [createDocxParagraph("", options)];
+}
+
+function formatLocatorEvidenceDocx(report) {
+  const actions = getLocatorEvidenceActions(report);
+
+  if (!actions.length) {
+    return [createDocxParagraph("No locator evidence captured.")];
+  }
+
+  const children = [];
+
+  for (const action of actions) {
+    const bestLocator = getBestLocator(action);
+    const fallbackLocators = getFallbackLocators(action);
+    const htmlSnippet = getActionHtmlSnippet(action);
+
+    children.push(
+      new docx.Paragraph({
+        spacing: { before: 120, after: 80 },
+        children: [
+          new docx.TextRun({
+            text: `Step ${getLocatorEvidenceStepNumber(report, action)}`,
+            bold: true
+          })
+        ]
+      })
+    );
+    children.push(createDocxLabelValue("Action", formatEvidenceActionDescription(action)));
+
+    if (bestLocator) {
+      children.push(createDocxLabelValue("Best Locator", bestLocator.value || ""));
+      children.push(createDocxLabelValue("Strategy", bestLocator.strategy || "unknown"));
+    } else {
+      children.push(createDocxLabelValue("Best Locator", "Not available."));
+
+      if (fallbackLocators.css) {
+        children.push(createDocxLabelValue("CSS", fallbackLocators.css));
+      }
+
+      if (fallbackLocators.xpath) {
+        children.push(createDocxLabelValue("XPath", fallbackLocators.xpath));
+      }
+    }
+
+    children.push(createDocxParagraph("HTML:", { spacing: { before: 80, after: 40 } }));
+
+    if (htmlSnippet) {
+      children.push(...createDocxTextBlock(htmlSnippet, { font: "Courier New" }));
+    } else {
+      children.push(createDocxParagraph("Not captured.", { font: "Courier New" }));
+    }
+
+    children.push(createDocxSpacer());
+  }
+
+  return children;
+}
+
+function formatScreenshotsDocx(screenshots) {
+  if (!screenshots.length) {
+    return [createDocxParagraph("Captured at: None")];
+  }
+
+  const children = [];
+
+  screenshots.forEach((screenshot, index) => {
+    children.push(
+      new docx.Paragraph({
+        spacing: { before: 160, after: 80 },
+        children: [
+          new docx.TextRun({
+            text: `Screenshot ${index + 1}`,
+            bold: true
+          })
+        ]
+      })
+    );
+    children.push(createDocxLabelValue("Reason", screenshot.reason || ""));
+    children.push(createDocxLabelValue("Captured At", screenshot.timestamp || ""));
+    children.push(createDocxLabelValue("URL", screenshot.pageUrl || ""));
+
+    const image = createDocxScreenshotImage(screenshot);
+
+    if (image) {
+      children.push(
+        new docx.Paragraph({
+          spacing: { before: 120, after: 160 },
+          children: [image]
+        })
+      );
+    } else {
+      children.push(createDocxParagraph("Image data not available."));
+    }
+  });
+
+  return children;
+}
+
+function createDocxScreenshotImage(screenshot) {
+  const parsedImage = parseDataUrlImage(screenshot.dataUrl || "");
+
+  if (!parsedImage) {
+    return null;
+  }
+
+  const dimensions = getPngDimensions(parsedImage.data) || { width: DOCX_IMAGE_WIDTH, height: Math.round(DOCX_IMAGE_WIDTH * 0.5625) };
+  const width = Math.min(DOCX_IMAGE_WIDTH, dimensions.width || DOCX_IMAGE_WIDTH);
+  const height = Math.max(1, Math.round(((dimensions.height || width) / (dimensions.width || width)) * width));
+
+  return new docx.ImageRun({
+    data: parsedImage.data,
+    type: parsedImage.mimeType === "image/jpeg" ? "jpg" : "png",
+    transformation: {
+      width,
+      height
+    }
+  });
 }
 
 function buildReproductionSteps(actions, fallbackUrl) {
@@ -1374,6 +1643,48 @@ function formatScreenshotTextList(screenshots) {
     (screenshot, index) =>
       `Screenshot ${index + 1}: captured at ${screenshot.timestamp || ""}; reason: ${screenshot.reason || ""}; URL: ${screenshot.pageUrl || ""}; data URL included in JSON: ${screenshot.dataUrl ? "yes" : "no"}`
   );
+}
+
+function parseDataUrlImage(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = match[1] || "image/png";
+  const isBase64 = Boolean(match[2]);
+  const payload = match[3] || "";
+  const binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
+  const data = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    data[index] = binary.charCodeAt(index);
+  }
+
+  return { mimeType, data };
+}
+
+function getPngDimensions(data) {
+  if (
+    !data ||
+    data.length < 24 ||
+    data[0] !== 0x89 ||
+    data[1] !== 0x50 ||
+    data[2] !== 0x4e ||
+    data[3] !== 0x47
+  ) {
+    return null;
+  }
+
+  return {
+    width: readUint32(data, 16),
+    height: readUint32(data, 20)
+  };
+}
+
+function readUint32(data, offset) {
+  return ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
 }
 
 function formatLocatorHints(actions) {
@@ -1908,6 +2219,30 @@ async function captureVisibleTab(windowId) {
 
 async function downloadText(filename, mimeType, text) {
   const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(text)}`;
+
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      {
+        url: dataUrl,
+        filename,
+        saveAs: false
+      },
+      (downloadId) => {
+        const runtimeError = chrome.runtime.lastError;
+
+        if (runtimeError?.message) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+
+        resolve(downloadId);
+      }
+    );
+  });
+}
+
+async function downloadBase64(filename, mimeType, base64) {
+  const dataUrl = `data:${mimeType};base64,${base64}`;
 
   return new Promise((resolve, reject) => {
     chrome.downloads.download(

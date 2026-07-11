@@ -14,6 +14,7 @@ const elements = {
   exportJsonBtn: document.getElementById("exportJsonBtn"),
   exportMarkdownBtn: document.getElementById("exportMarkdownBtn"),
   exportTxtBtn: document.getElementById("exportTxtBtn"),
+  exportDocxBtn: document.getElementById("exportDocxBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
   status: document.getElementById("status"),
   recordingPill: document.getElementById("recordingPill"),
@@ -60,6 +61,7 @@ elements.clearSessionBtn.addEventListener("click", () => runCommand("CLEAR_SESSI
 elements.exportJsonBtn.addEventListener("click", () => runExport("EXPORT_JSON", "JSON"));
 elements.exportMarkdownBtn.addEventListener("click", () => runExport("EXPORT_MARKDOWN", "Markdown"));
 elements.exportTxtBtn.addEventListener("click", () => runExport("EXPORT_TXT", "TXT"));
+elements.exportDocxBtn.addEventListener("click", () => runExport("EXPORT_DOCX", "DOCX"));
 elements.refreshBtn.addEventListener("click", () => loadRecordingState("State refreshed."));
 elements.recentActions.addEventListener("click", handleRecentActionClick);
 
@@ -414,6 +416,7 @@ function updateButtons(isRecording, hasSession) {
   elements.exportJsonBtn.disabled = isBusy || !hasSession;
   elements.exportMarkdownBtn.disabled = isBusy || !hasSession;
   elements.exportTxtBtn.disabled = isBusy || !hasSession;
+  elements.exportDocxBtn.disabled = isBusy || !hasSession;
   elements.clearSessionBtn.disabled = isBusy || !hasSession;
   elements.refreshBtn.disabled = isBusy;
 

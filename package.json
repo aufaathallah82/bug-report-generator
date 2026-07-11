@@ -5,5 +5,8 @@
   "description": "Plain JavaScript Chrome extension for recording bug reproduction evidence.",
   "scripts": {
     "build": "node scripts/validate-extension.js"
+  },
+  "dependencies": {
+    "docx": "^9.7.1"
   }
 }
