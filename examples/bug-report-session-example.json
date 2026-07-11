@@ -1,0 +1,139 @@
+{
+  "project": "BugReportGenerator",
+  "sourceProject": "AI-Test-Automation-Generator",
+  "exportType": "bug-report",
+  "extensionMetadata": {
+    "name": "BugReportGenerator",
+    "version": "1.0.0",
+    "architecture": "Plain JavaScript MV3 extension forked from AI-Test-Automation-Generator lifecycle."
+  },
+  "session": {
+    "id": "example-session-id",
+    "startedAt": "2026-06-15T02:00:00.000Z",
+    "endedAt": "2026-06-15T02:05:00.000Z",
+    "status": "stopped",
+    "activeRecordingTabId": 123
+  },
+  "environment": {
+    "browser": "Google Chrome",
+    "userAgent": "Mozilla/5.0 example",
+    "url": "https://www.saucedemo.com/",
+    "pageTitle": "Swag Labs",
+    "viewport": {
+      "width": 1366,
+      "height": 768,
+      "devicePixelRatio": 1
+    }
+  },
+  "summary": {
+    "titleSuggestion": "Bug encountered during Swag Labs",
+    "severitySuggestion": "Medium",
+    "prioritySuggestion": "Medium",
+    "affectedPage": "Swag Labs"
+  },
+  "visitedPages": [
+    {
+      "url": "https://www.saucedemo.com/",
+      "title": "Swag Labs",
+      "firstSeenAt": "2026-06-15T02:00:00.000Z",
+      "lastSeenAt": "2026-06-15T02:01:00.000Z",
+      "reasons": ["start"]
+    }
+  ],
+  "reproductionSteps": [
+    {
+      "step": 1,
+      "action": "Open https://www.saucedemo.com/"
+    },
+    {
+      "step": 2,
+      "action": "Typed \"standard_user\" into Username field"
+    },
+    {
+      "step": 3,
+      "action": "Typed [REDACTED] into Password field"
+    },
+    {
+      "step": 4,
+      "action": "Clicked Login button"
+    }
+  ],
+  "actions": [
+    {
+      "step": 3,
+      "type": "click",
+      "timestamp": "2026-06-15T02:01:10.000Z",
+      "url": "https://www.saucedemo.com/",
+      "title": "Swag Labs",
+      "element": {
+        "tag": "input",
+        "text": "",
+        "accessibleLabel": "Username",
+        "placeholder": "Username",
+        "attributes": {
+          "id": "user-name",
+          "name": "user-name",
+          "type": "text"
+        },
+        "domPath": "html > body > div > input:nth-of-type(1)",
+        "nearbyText": "Username Password Login",
+        "parentContext": "form"
+      },
+      "locators": {
+        "candidates": [
+          {
+            "strategy": "id",
+            "value": "#user-name",
+            "score": 94,
+            "reason": "Stable id attribute.",
+            "uniqueness": "unique",
+            "stabilityNotes": "Good if application keeps ids stable."
+          }
+        ],
+        "best": {
+          "strategy": "id",
+          "value": "#user-name",
+          "score": 94,
+          "reason": "Stable id attribute.",
+          "uniqueness": "unique",
+          "stabilityNotes": "Good if application keeps ids stable."
+        }
+      },
+      "description": "Clicked Username field"
+    }
+  ],
+  "consoleWarnings": [],
+  "consoleErrors": [],
+  "javascriptErrors": [],
+  "promiseRejections": [],
+  "networkErrors": [
+    {
+      "category": "network-error",
+      "transport": "fetch",
+      "requestUrl": "https://www.saucedemo.com/api/example",
+      "method": "GET",
+      "status": 500,
+      "failureReason": "HTTP 500",
+      "timestamp": "2026-06-15T02:02:00.000Z"
+    }
+  ],
+  "screenshots": [
+    {
+      "id": "example-screenshot-id",
+      "timestamp": "2026-06-15T02:03:00.000Z",
+      "reason": "manual",
+      "pageUrl": "https://www.saucedemo.com/inventory.html",
+      "title": "Swag Labs",
+      "mimeType": "image/png",
+      "dataUrl": null
+    }
+  ],
+  "suspectedAffectedComponent": "Network/API",
+  "severitySuggestion": "Medium",
+  "prioritySuggestion": "Medium",
+  "aiAnalysisNotes": [
+    "Captured 4 user actions across 2 visited page entries.",
+    "Network evidence exists. First failed request: GET https://www.saucedemo.com/api/example (500)."
+  ],
+  "rawEvents": []
+}
