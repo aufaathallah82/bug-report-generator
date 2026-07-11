@@ -7,6 +7,8 @@ const MAX_ACTIONS = 500;
 const MAX_EVIDENCE = 250;
 const MAX_SCREENSHOTS = 5;
 const MAX_PAGE_SNAPSHOTS = 100;
+const MAX_HTML_SNIPPET_LENGTH = 1000;
+const LOCATOR_EVIDENCE_ACTION_TYPES = new Set(["click", "input", "change", "submit", "enter_key", "tab_key"]);
 const DEFAULT_REPORT_METADATA = {
   bugTitle: "",
   description: "",
@@ -708,10 +710,7 @@ async function exportText() {
 }
 
 function buildBugReportJson(session) {
-  const actions = (session.recordedActions || []).map((action, index) => ({
-    ...action,
-    step: index + 1
-  }));
+  const actions = (session.recordedActions || []).map((action, index) => buildExportAction(action, index + 1));
   const reportMetadata = normalizeReportMetadata(session.reportMetadata);
   const environment = normalizeEnvironment(
     session.environment || buildDefaultEnvironment({ url: session.currentUrl, title: session.currentTitle })
@@ -764,6 +763,7 @@ function buildBugReportJson(session) {
     locatorData: actions.map((action) => ({
       step: action.step,
       description: action.description || action.text || "",
+      htmlSnippet: getActionHtmlSnippet(action),
       element: action.element || null,
       locators: action.locators || null
     })),
@@ -785,6 +785,30 @@ function buildBugReportJson(session) {
   };
 }
 
+function buildExportAction(action, step) {
+  const htmlSnippet = normalizeHtmlSnippet(getActionHtmlSnippet(action));
+  const element = action.element
+    ? {
+        ...action.element,
+        ...(htmlSnippet ? { htmlSnippet } : {})
+      }
+    : action.element;
+  const locators = action.locators
+    ? {
+        ...action.locators,
+        ...(htmlSnippet ? { html: htmlSnippet } : {})
+      }
+    : action.locators;
+
+  return {
+    ...action,
+    step,
+    ...(htmlSnippet ? { htmlSnippet } : {}),
+    element,
+    locators
+  };
+}
+
 function buildBugReportMarkdown(report) {
   const metadata = report.reportMetadata || DEFAULT_REPORT_METADATA;
   const title = metadata.bugTitle || report.summary.titleSuggestion;
@@ -802,6 +826,9 @@ function buildBugReportMarkdown(report) {
     "",
     "## Steps to Reproduce",
     ...report.reproductionSteps.map((step) => `${step.step}. ${step.action}`),
+    "",
+    "## Locator Evidence",
+    ...formatLocatorEvidenceMarkdown(report),
     "",
     "## Expected Result",
     expectedResult,
@@ -859,6 +886,9 @@ function buildBugReportText(report) {
     "",
     "STEPS TO REPRODUCE",
     ...report.reproductionSteps.map((step) => `${step.step}. ${step.action}`),
+    "",
+    "LOCATOR EVIDENCE",
+    ...formatLocatorEvidenceText(report),
     "",
     "EXPECTED RESULT",
     metadata.expectedResult || "Not provided.",
@@ -1118,6 +1148,178 @@ function formatPlainNetworkEvidenceList(items) {
     .join("\n\n");
 }
 
+function formatLocatorEvidenceMarkdown(report) {
+  const actions = getLocatorEvidenceActions(report);
+
+  if (!actions.length) {
+    return ["No locator evidence captured."];
+  }
+
+  const lines = [];
+
+  for (const action of actions) {
+    const bestLocator = getBestLocator(action);
+    const fallbackLocators = getFallbackLocators(action);
+    const htmlSnippet = getActionHtmlSnippet(action);
+
+    lines.push(`### Step ${getLocatorEvidenceStepNumber(report, action)}: ${formatEvidenceActionDescription(action)}`);
+
+    if (bestLocator) {
+      lines.push(`- Best locator: \`${escapeMarkdownInlineCode(bestLocator.value)}\``);
+      lines.push(`- Strategy: ${bestLocator.strategy || "unknown"}`);
+    } else {
+      lines.push("- Best locator: Not available.");
+
+      if (fallbackLocators.css) {
+        lines.push(`- CSS: \`${escapeMarkdownInlineCode(fallbackLocators.css)}\``);
+      }
+
+      if (fallbackLocators.xpath) {
+        lines.push(`- XPath: \`${escapeMarkdownInlineCode(fallbackLocators.xpath)}\``);
+      }
+    }
+
+    if (htmlSnippet) {
+      lines.push("- HTML:");
+      lines.push("```html");
+      lines.push(escapeMarkdownFenceContent(htmlSnippet));
+      lines.push("```");
+    } else {
+      lines.push("- HTML: Not captured.");
+    }
+
+    lines.push("");
+  }
+
+  return lines.slice(0, -1);
+}
+
+function formatLocatorEvidenceText(report) {
+  const actions = getLocatorEvidenceActions(report);
+
+  if (!actions.length) {
+    return ["No locator evidence captured."];
+  }
+
+  const lines = [];
+
+  for (const action of actions) {
+    const bestLocator = getBestLocator(action);
+    const fallbackLocators = getFallbackLocators(action);
+    const htmlSnippet = getActionHtmlSnippet(action);
+
+    lines.push(`Step ${getLocatorEvidenceStepNumber(report, action)}: ${formatEvidenceActionDescription(action)}`);
+
+    if (bestLocator) {
+      lines.push(`Best locator: ${bestLocator.value || ""}`);
+      lines.push(`Strategy: ${bestLocator.strategy || "unknown"}`);
+    } else {
+      lines.push("Best locator: Not available.");
+
+      if (fallbackLocators.css) {
+        lines.push(`CSS: ${fallbackLocators.css}`);
+      }
+
+      if (fallbackLocators.xpath) {
+        lines.push(`XPath: ${fallbackLocators.xpath}`);
+      }
+    }
+
+    lines.push(`HTML: ${htmlSnippet || "Not captured."}`);
+    lines.push("");
+  }
+
+  return lines.slice(0, -1);
+}
+
+function getLocatorEvidenceActions(report) {
+  return (report.actions || []).filter((action) => {
+    if (!action || !LOCATOR_EVIDENCE_ACTION_TYPES.has(action.type)) {
+      return false;
+    }
+
+    const fallbackLocators = getFallbackLocators(action);
+    return Boolean(getBestLocator(action) || getActionHtmlSnippet(action) || fallbackLocators.css || fallbackLocators.xpath);
+  });
+}
+
+function getBestLocator(action) {
+  const best = action?.locators?.best;
+
+  if (!best || best.strategy === "url" || !best.value) {
+    return null;
+  }
+
+  return best;
+}
+
+function getFallbackLocators(action) {
+  const candidates = Array.isArray(action?.locators?.candidates) ? action.locators.candidates : [];
+  const css = candidates.find((candidate) => candidate.strategy === "css" && candidate.value)?.value || "";
+  const xpath =
+    candidates.find((candidate) => /xpath/i.test(candidate.strategy || "") && candidate.value)?.value || "";
+
+  return { css, xpath };
+}
+
+function getLocatorEvidenceStepNumber(report, action) {
+  const hasOpeningStep = String(report.reproductionSteps?.[0]?.action || "").startsWith("Open ");
+  return (Number(action.step) || 0) + (hasOpeningStep ? 1 : 0);
+}
+
+function formatEvidenceActionDescription(action) {
+  const text = action.description || action.text || describeActionForStep(action);
+
+  if (!isSensitiveEvidenceAction(action)) {
+    return text;
+  }
+
+  return text.replace(/"[^"]*"/g, "[REDACTED]");
+}
+
+function isSensitiveEvidenceAction(action) {
+  const inputType = action.target?.inputType || action.element?.attributes?.type || "";
+  const label = [
+    action.target?.label,
+    action.element?.accessibleLabel,
+    action.element?.placeholder,
+    action.element?.attributes?.name,
+    action.element?.attributes?.id,
+    action.element?.attributes?.["data-testid"],
+    action.element?.attributes?.["data-test"],
+    action.element?.attributes?.["data-qa"],
+    action.element?.attributes?.["data-cy"]
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return inputType.toLowerCase() === "password" || /password|secret|token|credential/.test(label);
+}
+
+function getActionHtmlSnippet(action) {
+  return normalizeHtmlSnippet(
+    action?.htmlSnippet ||
+      action?.element?.htmlSnippet ||
+      action?.locators?.html ||
+      action?.locators?.htmlSnippet ||
+      ""
+  );
+}
+
+function normalizeHtmlSnippet(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > MAX_HTML_SNIPPET_LENGTH ? `${text.slice(0, MAX_HTML_SNIPPET_LENGTH - 3)}...` : text;
+}
+
+function escapeMarkdownInlineCode(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().replace(/`/g, "\\`");
+}
+
+function escapeMarkdownFenceContent(value) {
+  return String(value || "").replace(/```/g, "'''");
+}
+
 function getCombinedConsoleEvidence(report) {
   return [
     ...(report.consoleErrors || []),
@@ -1224,6 +1426,22 @@ function normalizeAction(action, step, tabId) {
     };
   }
 
+  const htmlSnippet = getActionHtmlSnippet(normalized);
+
+  if (htmlSnippet) {
+    normalized.htmlSnippet = htmlSnippet;
+    normalized.element = normalized.element
+      ? {
+          ...normalized.element,
+          htmlSnippet
+        }
+      : normalized.element;
+    normalized.locators = {
+      ...normalized.locators,
+      html: htmlSnippet
+    };
+  }
+
   return normalized;
 }
 
@@ -1269,6 +1487,10 @@ function mergeRecordedActions(actions, action) {
       value: action.value,
       description: action.description,
       text: action.text,
+      htmlSnippet: action.htmlSnippet || previousAction.htmlSnippet,
+      element: action.element || previousAction.element,
+      locators: action.locators || previousAction.locators,
+      target: action.target || previousAction.target,
       step: previousAction.step
     };
     return renumberActions(nextActions);

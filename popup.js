@@ -52,6 +52,7 @@ let isBusy = false;
 let isRendering = false;
 let latestSession = null;
 let metadataSaveTimer = null;
+let recentActionCopyValues = new Map();
 
 elements.startRecordingBtn.addEventListener("click", () => runCommand("START_BUG_RECORDING", "Recording started."));
 elements.stopRecordingBtn.addEventListener("click", () => runCommand("STOP_RECORDING", "Recording stopped."));
@@ -60,6 +61,7 @@ elements.exportJsonBtn.addEventListener("click", () => runExport("EXPORT_JSON", 
 elements.exportMarkdownBtn.addEventListener("click", () => runExport("EXPORT_MARKDOWN", "Markdown"));
 elements.exportTxtBtn.addEventListener("click", () => runExport("EXPORT_TXT", "TXT"));
 elements.refreshBtn.addEventListener("click", () => loadRecordingState("State refreshed."));
+elements.recentActions.addEventListener("click", handleRecentActionClick);
 
 for (const button of elements.saveReportBtns) {
   button.addEventListener("click", () => saveReport());
@@ -309,6 +311,7 @@ function renderRecentActions(actions) {
   const orderedActions = actions
     .slice()
     .sort((first, second) => (first.step || 0) - (second.step || 0));
+  recentActionCopyValues = new Map();
 
   if (!orderedActions.length) {
     elements.recentActions.innerHTML = "<li>No actions recorded yet.</li>";
@@ -318,11 +321,38 @@ function renderRecentActions(actions) {
   elements.recentActions.innerHTML = orderedActions
     .map((action, index) => {
       const step = Number(action.step) || index + 1;
-      const locator = formatLocator(action);
+      const actionKey = action.id || `${step}-${index}`;
+      const locatorEvidence = formatActionLocatorEvidence(action, actionKey);
 
-      return `<li value="${step}"><span class="action-text">${escapeHtml(formatActionDescription(action))}</span>${locator}</li>`;
+      return `<li value="${step}"><span class="action-text">${escapeHtml(formatActionDescription(action))}</span>${locatorEvidence}</li>`;
     })
     .join("");
+}
+
+async function handleRecentActionClick(event) {
+  if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const button = event.target.closest("[data-copy-key][data-copy-kind]");
+
+  if (!button) {
+    return;
+  }
+
+  const copyKey = `${button.dataset.copyKey}:${button.dataset.copyKind}`;
+  const value = recentActionCopyValues.get(copyKey);
+
+  if (!value) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    setStatus(button.dataset.copyKind === "html" ? "HTML snippet copied." : "Locator copied.", "success");
+  } catch (_error) {
+    setStatus("Unable to copy to clipboard.", "error");
+  }
 }
 
 function renderScreenshot(session) {
@@ -506,7 +536,11 @@ function isSensitiveAction(action) {
     action.element?.accessibleLabel,
     action.element?.placeholder,
     action.element?.attributes?.name,
-    action.element?.attributes?.id
+    action.element?.attributes?.id,
+    action.element?.attributes?.["data-testid"],
+    action.element?.attributes?.["data-test"],
+    action.element?.attributes?.["data-qa"],
+    action.element?.attributes?.["data-cy"]
   ]
     .filter(Boolean)
     .join(" ")
@@ -515,16 +549,131 @@ function isSensitiveAction(action) {
   return inputType.toLowerCase() === "password" || /password|secret|token|credential/.test(label);
 }
 
-function formatLocator(action) {
-  const best = action.locators?.best;
+function formatActionLocatorEvidence(action, actionKey) {
+  const best = getBestLocator(action);
+  const htmlSnippet = getActionHtmlSnippet(action);
+  const details = formatActionEvidenceDetails(action, actionKey);
+  const parts = [];
 
-  if (!best || best.strategy === "url") {
+  if (best) {
+    recentActionCopyValues.set(`${actionKey}:locator`, best.value);
+    parts.push(
+      `<span class="action-locator">Best locator: <code title="${escapeHtml(best.value)}">${escapeHtml(shortenText(best.value, 96))}</code></span>`
+    );
+    parts.push(`<span class="action-strategy">Strategy: ${escapeHtml(best.strategy || "unknown")}</span>`);
+  }
+
+  if (details) {
+    if (htmlSnippet) {
+      recentActionCopyValues.set(`${actionKey}:html`, htmlSnippet);
+    }
+
+    parts.push(details);
+  }
+
+  return parts.join("");
+}
+
+function formatActionEvidenceDetails(action, actionKey) {
+  const best = getBestLocator(action);
+  const htmlSnippet = getActionHtmlSnippet(action);
+  const fallbackLocators = getFallbackLocators(action);
+  const rows = [];
+  const buttons = [];
+
+  if (!best && !htmlSnippet && !fallbackLocators.css && !fallbackLocators.xpath) {
     return "";
   }
 
-  const value = String(best.value || "");
-  const shortened = value.length > 90 ? `${value.slice(0, 87)}...` : value;
-  return `<span class="action-locator">${escapeHtml(best.strategy)}: <code>${escapeHtml(shortened)}</code></span>`;
+  if (best?.strategy) {
+    rows.push(`<div><dt>Strategy</dt><dd>${escapeHtml(best.strategy)}</dd></div>`);
+  }
+
+  if (typeof best?.score === "number") {
+    rows.push(`<div><dt>Score</dt><dd>${escapeHtml(String(best.score))}</dd></div>`);
+  }
+
+  if (htmlSnippet) {
+    rows.push(
+      `<div class="wide"><dt>HTML</dt><dd><code title="${escapeHtml(htmlSnippet)}">${escapeHtml(shortenText(htmlSnippet, 180))}</code></dd></div>`
+    );
+  }
+
+  if (fallbackLocators.css) {
+    rows.push(
+      `<div class="wide"><dt>CSS</dt><dd><code title="${escapeHtml(fallbackLocators.css)}">${escapeHtml(shortenText(fallbackLocators.css, 140))}</code></dd></div>`
+    );
+  }
+
+  if (fallbackLocators.xpath) {
+    rows.push(
+      `<div class="wide"><dt>XPath</dt><dd><code title="${escapeHtml(fallbackLocators.xpath)}">${escapeHtml(shortenText(fallbackLocators.xpath, 140))}</code></dd></div>`
+    );
+  }
+
+  if (best) {
+    buttons.push(
+      `<button class="copy-evidence-button" type="button" data-copy-key="${escapeHtml(actionKey)}" data-copy-kind="locator">Copy Locator</button>`
+    );
+  }
+
+  if (htmlSnippet) {
+    buttons.push(
+      `<button class="copy-evidence-button" type="button" data-copy-key="${escapeHtml(actionKey)}" data-copy-kind="html">Copy HTML</button>`
+    );
+  }
+
+  return [
+    '<details class="action-details">',
+    "<summary>Show details</summary>",
+    rows.length ? `<dl class="action-evidence-list">${rows.join("")}</dl>` : "",
+    buttons.length ? `<div class="action-evidence-actions">${buttons.join("")}</div>` : "",
+    "</details>"
+  ].join("");
+}
+
+function getBestLocator(action) {
+  const best = action.locators?.best;
+
+  if (!best || best.strategy === "url" || !best.value) {
+    return null;
+  }
+
+  return {
+    ...best,
+    value: normalizeOneLine(best.value)
+  };
+}
+
+function getFallbackLocators(action) {
+  const candidates = Array.isArray(action.locators?.candidates) ? action.locators.candidates : [];
+  const css = candidates.find((candidate) => candidate.strategy === "css" && candidate.value)?.value || "";
+  const xpath =
+    candidates.find((candidate) => /xpath/i.test(candidate.strategy || "") && candidate.value)?.value || "";
+
+  return {
+    css: normalizeOneLine(css),
+    xpath: normalizeOneLine(xpath)
+  };
+}
+
+function getActionHtmlSnippet(action) {
+  return normalizeOneLine(
+    action.htmlSnippet ||
+      action.element?.htmlSnippet ||
+      action.locators?.html ||
+      action.locators?.htmlSnippet ||
+      ""
+  );
+}
+
+function normalizeOneLine(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function shortenText(value, maxLength) {
+  const text = normalizeOneLine(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
 function getConsoleErrorCount(session) {
